@@ -311,3 +311,192 @@ For each benchmark run:
 
 ---
 
+### Fireworks/StarCoder HTTP Streaming Pipeline
+
+**Purpose:** Benchmark Fill-In-the-Middle (FIM) code completion using StarCoder
+**Protocol:** HTTP/HTTPS with Server-Sent Events (SSE)
+**Source:** `cmd/src/gateway_benchmark_stream.go` (removed)
+**Entry Point:** `buildGatewayHttpEndpoint()` with provider="fireworks"
+
+#### Pipeline Overview
+
+This pipeline is structurally identical to the Anthropic pipeline but uses StarCoder's FIM (Fill-In-the-Middle) format for code completion. The key differences are in the prompt structure and model parameters.
+
+#### Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  Fireworks/StarCoder HTTP Streaming Pipeline            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+User Input
+   │
+   ├─► Provider Selection: "fireworks"
+   ├─► Max Tokens: 256 (configurable)
+   ├─► Stream Mode: true/false
+   ├─► Request Count: 1000 (configurable)
+   └─► Authentication: Bearer token
+       │
+       ▼
+┌──────────────────────────────────────┐
+│  buildGatewayHttpEndpoint()          │
+│  - Constructs endpoint URL           │
+│  - Builds JSON with FIM tokens       │
+│  - Sets authentication headers       │
+└──────────────────────────────────────┘
+       │
+       ▼
+   Endpoint Configuration:
+   ├─► URL: /v1/completions/fireworks
+   ├─► Model: starcoder
+   └─► Prompt: TypeScript FIM with special tokens
+       │
+       ▼
+┌──────────────────────────────────────┐
+│  benchmarkCodeCompletions()          │
+│  (Same as Anthropic pipeline)        │
+│  - Loops N times                     │
+│  - Collects timing data              │
+└──────────────────────────────────────┘
+       │
+       ▼
+   HTTP Request Body:
+   {
+     "model": "starcoder",
+     "prompt": "#hello.ts<｜fim▁begin｜>const sayHello = () => <｜fim▁hole｜><｜fim▁end｜>",
+     "max_tokens": 256,
+     "stop": ["\n\n", "\n\r\n", "<｜fim▁begin｜>", ...],
+     "temperature": 0.2,
+     "topK": 0,
+     "topP": 0,
+     "stream": true/false
+   }
+       │
+       ▼
+  Cody Gateway
+  /v1/completions/fireworks
+       │
+       ▼
+  Fireworks API (StarCoder)
+       │
+       ▼
+   Response: TypeScript code completion
+       │
+       ▼
+   (Same processing as Anthropic pipeline)
+   │
+   ├─► Statistical analysis
+   ├─► CSV export
+   └─► Console output
+```
+
+#### Key Differences from Anthropic Pipeline
+
+| Aspect | Anthropic/Claude | Fireworks/StarCoder |
+|--------|------------------|---------------------|
+| **Endpoint** | `/v1/completions/anthropic-messages` | `/v1/completions/fireworks` |
+| **Model** | `claude-3-haiku-20240307` | `starcoder` |
+| **Prompt Format** | Messages array (role/content) | Single prompt string with FIM tokens |
+| **Language** | Python | TypeScript |
+| **Temperature** | 0.0 (deterministic) | 0.2 (slightly creative) |
+| **Stop Sequences** | None (implicit) | Explicit FIM tokens + newlines |
+| **Sampling** | Default | topK=0, topP=0 (disabled) |
+| **Use Case** | General completion | Fill-in-the-middle completion |
+
+#### FIM Token Processing
+
+StarCoder's FIM tokens structure the prompt:
+
+```
+Prefix: "#hello.ts<｜fim▁begin｜>const sayHello = () => "
+Hole:   "<｜fim▁hole｜>"
+Suffix: "<｜fim▁end｜>"
+```
+
+The model understands:
+1. **Begin token** - Start of file context
+2. **Hole token** - Where to insert completion
+3. **End token** - End of file context
+
+This allows the model to see code before AND after the cursor, producing more contextually accurate completions.
+
+#### Example Request/Response Flow
+
+**Request:**
+```json
+{
+    "model": "starcoder",
+    "prompt": "#hello.ts<｜fim▁begin｜>const sayHello = () => <｜fim▁hole｜><｜fim▁end｜>",
+    "max_tokens": 256,
+    "stop": ["\n\n", "\n\r\n", "<｜fim▁begin｜>", "<｜fim▁hole｜>", "<｜fim▁end｜>, <|eos_token|>"],
+    "temperature": 0.2,
+    "stream": false
+}
+```
+
+**Response:**
+```json
+{
+    "choices": [{
+        "text": "{\n    console.log(\"Hello, World!\");\n}"
+    }],
+    "usage": { "completion_tokens": 15 }
+}
+```
+
+**Final Code:**
+```typescript
+const sayHello = () => {
+    console.log("Hello, World!");
+}
+```
+
+#### Configuration Options
+
+```bash
+--requests <N>          # Number of requests per endpoint (default: 1000)
+--max-tokens <N>        # Max tokens to generate (default: 256)
+--provider fireworks    # Select Fireworks/StarCoder provider
+--stream               # Enable streaming mode (default: false)
+--gateway <URL>        # Cody Gateway endpoint
+--sgd <token>          # Sourcegraph Dotcom user key
+```
+
+#### Example Usage
+
+```bash
+# Test StarCoder FIM completions
+src gateway benchmark-stream \
+  --provider fireworks \
+  --stream \
+  --requests 100 \
+  --max-tokens 256 \
+  --gateway https://cody-gateway.sourcegraph.com \
+  --sgd <your-token>
+
+# Compare StarCoder vs Claude
+src gateway benchmark-stream \
+  --provider fireworks \
+  --requests 500 \
+  --csv starcoder_results.csv \
+  --sgd <your-token>
+```
+
+#### Performance Considerations
+
+StarCoder vs Claude performance characteristics:
+
+**StarCoder Advantages:**
+- Faster for simple code completions
+- Better for middle-of-line insertions
+- More efficient tokenization for code
+
+**Claude Advantages:**
+- Better contextual understanding
+- More natural language comprehension
+- Handles complex multi-line completions better
+
+Both pipelines collect identical metrics for fair comparison.
+
+---
+
